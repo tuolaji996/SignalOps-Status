@@ -58,15 +58,11 @@ $isHttpUrl = static fn (string $url): bool => (bool)preg_match('#^https?://#i', 
           <?= $v->t('common.footer.powered_by') ?> <?= $isHttpUrl($repoUrl) ? '<a href="' . $v->e($repoUrl) . '" target="_blank" rel="noopener noreferrer">SignalOps Status</a>' : 'SignalOps Status' ?>
           · <a href="/index.php"><?= $v->t('common.footer.classic') ?></a>
         </div>
-<?php $stats = SignalOps\Status\Http\RequestStats::snapshot($app->request->header('Accept-Encoding')); $onOff = static fn (bool $on): string => $v->t($on ? 'common.footer.on' : 'common.footer.off'); ?>
+<?php $stats = SignalOps\Status\Http\RequestStats::snapshot(); ?>
         <div class="app-footer-stats" data-render-stats style="margin-top: 4px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; opacity: .8"><?= $v->e(implode(' · ', [
             $v->t('common.footer.processed', ['seconds' => sprintf('%.4f', $stats['seconds'])]),
             $v->t('common.footer.cache', ['reads' => $stats['cache_reads'], 'hits' => $stats['cache_hits']]),
             $v->t('common.footer.files', ['count' => $stats['file_reads']]),
-            'Gzip ' . $onOff($stats['gzip']),
-            'OPcache ' . $onOff($stats['opcache']),
-            'APCu ' . $onOff($stats['apcu']),
-            'PHP ' . $stats['php'],
             $v->t('common.footer.memory', ['mb' => sprintf('%.1f', $stats['memory_mb'])]),
         ])) ?></div>
       </footer>

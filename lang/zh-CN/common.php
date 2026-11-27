@@ -53,8 +53,6 @@ return [
     'footer.cache' => '缓存读取 {reads} 次（命中 {hits}）',
     'footer.files' => '快照读取 {count} 次',
     'footer.memory' => '内存 {mb} MB',
-    'footer.on' => '开启',
-    'footer.off' => '关闭',
     'footer.powered_by' => '技术支持：',
     'footer.classic' => '经典版面板',
     'demo.title' => '演示模式。',

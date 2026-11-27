@@ -53,8 +53,6 @@ return [
     'footer.cache' => '{reads} cache reads ({hits} hits)',
     'footer.files' => '{count} snapshot reads',
     'footer.memory' => 'Memory {mb} MB',
-    'footer.on' => 'On',
-    'footer.off' => 'Off',
     'footer.powered_by' => 'Powered by',
     'footer.classic' => 'Classic dashboard',
     'demo.title' => 'Demo mode.',

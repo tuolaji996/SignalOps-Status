@@ -5,7 +5,8 @@ namespace SignalOps\Status\Http;
 
 /**
  * Per-request numbers for the page footer, e.g. "Processed in 0.0031 s · 3 cache reads (2 hits)
- * · Gzip On · OPcache On · APCu On · PHP 8.x · 2.1 MB". FPM handles one request per
+ * · 1 file read · Memory 2.1 MB". Server software and versions are deliberately not reported:
+ * the footer is public. FPM handles one request per
  * worker at a time, so plain static counters are per request (reset() at the start).
  */
 final class RequestStats
@@ -51,10 +52,9 @@ final class RequestStats
     }
 
     /**
-     * @return array{seconds: float, cache_reads: int, cache_hits: int, file_reads: int, queries: int, gzip: bool,
-     *   opcache: bool, apcu: bool, php: string, memory_mb: float}
+     * @return array{seconds: float, cache_reads: int, cache_hits: int, file_reads: int, queries: int, memory_mb: float}
      */
-    public static function snapshot(string $acceptEncoding = ''): array
+    public static function snapshot(): array
     {
         return [
             'seconds' => self::elapsed(),
@@ -62,21 +62,7 @@ final class RequestStats
             'cache_hits' => self::$cacheHits,
             'file_reads' => self::$fileReads,
             'queries' => self::$queries,
-            // Assumes the web server gzips text/html for clients that accept it (see deploy/nginx).
-            'gzip' => (bool)preg_match('/\bgzip\b/i', $acceptEncoding),
-            'opcache' => self::opcache(),
-            'apcu' => function_exists('apcu_enabled') && apcu_enabled(),
-            'php' => PHP_VERSION,
             'memory_mb' => round(memory_get_peak_usage() / 1048576, 1),
         ];
-    }
-
-    private static function opcache(): bool
-    {
-        if (!function_exists('opcache_get_status')) {
-            return false;
-        }
-        $status = @opcache_get_status(false);
-        return is_array($status) && !empty($status['opcache_enabled']);
     }
 }
