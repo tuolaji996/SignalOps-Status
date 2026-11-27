@@ -8,17 +8,26 @@ Search keywords: PHP Based status page, self-hosted status dashboard, Discord bo
 
 ![SignalOps Status screenshot](docs/screenshot.png)
 
-The default interface uses a dark NOC-style console, with a built-in Light/Dark toggle for communities that need a brighter embed or landing-page look.
+v0.3 replaces the single page with a dense NOC console split into pages: **Overview, Servers, Latency, Logs, Events, Alerts**. It ships in English and Simplified Chinese, with dark and light themes. Theme and language follow the system by default, and the visitor's choice is remembered. The v0.2 single-page dashboard is still served at `/index.php`.
+
+| Light theme | Phone |
+| --- | --- |
+| ![Light theme](docs/screenshot-light.png) | ![Phone layout](docs/screenshot-mobile.png) |
 
 ## Highlights
 
-- **PHP Based**: no Node build pipeline, no frontend framework, no external SaaS dependency.
-- Dark and light UI themes with browser-local preference storage.
+- **PHP Based**: no Node build pipeline, no frontend framework, no external SaaS dependency. Plain CSS + ES-module JS, self-hosted IBM Plex fonts.
+- Multi-page console (Overview, Servers, Latency, Logs, Events, Alerts) behind a tiny front controller and router.
+- English and Simplified Chinese UI (`?lang=en|zh-CN`, remembered in a cookie, defaults to the browser language).
+- Dark, light, and system themes (`?theme=`, remembered in a cookie; works without JavaScript).
+- Phone layout with a bottom tab bar.
+- Live in-place refresh of numbers on the overview without reloading the page.
+- Latency as a 6x6-style matrix (default) or a zoomable map with clickable nodes.
+- Alerts page that shows the JSON export of any external health checker, behind a password login.
 - Discord bot health cards from private `/health.json` endpoints.
 - Sanitized Discord bot error journal from systemd/journald.
 - CPU, memory, I/O wait, load, uptime, disk, services, and private-network traffic.
 - Ping-only SLA, separate from service health.
-- Interactive point-to-point latency map with clickable server nodes.
 - Optional MySQL summary for archived trading signals or bot events.
 - Demo mode is enabled by default, so the dashboard works immediately after clone.
 - Stale-first cache with optional tmpfs snapshots, browser revalidation, and CDN-friendly headers.
@@ -41,8 +50,10 @@ It is not intended to be a full observability stack like Grafana, Prometheus, or
 Run the demo locally:
 
 ```bash
-php -S 127.0.0.1:8080 -t public
+php -S 127.0.0.1:8080 -t public scripts/dev-router.php
 ```
+
+The router script gives the PHP built-in server the same clean URLs (`/servers`, `/latency`, ...) that the nginx example provides.
 
 Open:
 
@@ -70,7 +81,62 @@ Edit `/etc/signalops-status/config.php`:
 ],
 ```
 
-Point your virtual host document root at `public/`. If your hosting panel points at the repository root, `index.php` forwards to `public/index.php`.
+Point your virtual host document root at `public/` and send unknown paths to `public/index.php` (front controller). [deploy/nginx/signalops-status.conf](deploy/nginx/signalops-status.conf) is a complete example with long-lived caching for `/assets/site/`. If your hosting panel can only point at the repository root, `index.php` forwards to `public/index.php`, but clean URLs and the new assets need `public/` as the document root.
+
+The new pages only read the snapshot written by the cache warmer. Until it has run once (or until someone opens the classic page at `/index.php`), they show a "no snapshot yet" notice. Install the timer from [Cache Warmer](#cache-warmer).
+
+### Pages
+
+| Path | Page |
+| --- | --- |
+| `/`, `/overview` | KPIs, server table, latency matrix, service health, bot journal, events, runtime. |
+| `/servers` | Server table with expandable details (CPU model, services, disks, traffic, SLA). |
+| `/latency` | Latency matrix; `?view=map` for the map. |
+| `/logs` | Sanitized Discord bot error journal and service health. |
+| `/events` | Latest archived signals/events from the optional database. |
+| `/alerts` | Alerts from an external health checker (login required). |
+| `/overview/live` | JSON used by the overview's live refresh. |
+| `/index.php` | The v0.2 single-page dashboard. |
+
+### Alerts and Login
+
+`/alerts` is a private page. Set a password hash in config:
+
+```bash
+php -r 'echo password_hash("your-password", PASSWORD_DEFAULT), PHP_EOL;'
+```
+
+```php
+'auth' => [
+    'enabled' => true,
+    'password_hash' => '$2y$10$...',
+],
+```
+
+Login uses a PHP session plus CSRF token, and private pages are sent `no-store` so a CDN never caches them. In demo mode with no password configured, `/alerts` opens without login and shows sample alerts. With demo off and no password, it returns 503.
+
+SignalOps does not decide what is an alert. A separate health checker (cron script, monitoring agent, systemd timer) writes a JSON file to `alerts.export_path` (default `/var/lib/signalops-status/alerts/page.json`), and the page shows it. Write the file atomically (temp file + rename) and make it readable by the web server user. Format (`signalops-healthcheck-page-v1`):
+
+```json
+{
+  "schema": "signalops-healthcheck-page-v1",
+  "version": 1,
+  "host": "web",
+  "generated_at_utc": "2026-01-01T12:00:00Z",
+  "last_run_utc": "2026-01-01T12:00:00Z",
+  "active": [
+    {"id": "disk:db:/var/lib/mysql", "severity": "P2", "title": "Disk usage above 80%",
+     "detail": "81.8% used", "since": "2026-01-01T09:00:00Z", "last_seen": "2026-01-01T12:00:00Z",
+     "last_notified": null, "count": 90}
+  ],
+  "recent": [
+    {"kind": "recovered", "id": "svc:discord-bot", "severity": "P1", "title": "discord-bot.service was not active",
+     "detail": "", "since": "2026-01-01T07:10:00Z", "at": "2026-01-01T07:14:00Z"}
+  ]
+}
+```
+
+Severities are `P0`–`P3`. `recent` is newest first (around 7 days, at most 50 rows). Timestamps may be ISO 8601 strings or Unix seconds. If `last_run_utc` is older than `alerts.stale_after_seconds` (300), the page warns that the checker is late. Never put secrets in titles or details.
 
 ## Probe Model
 
@@ -116,6 +182,11 @@ Important fields:
 | Field | Purpose |
 | --- | --- |
 | `app.demo` | Set to `false` for production. |
+| `app.timezone` | Time zone for the header clock and timestamps. |
+| `auth.password_hash` | `password_hash()` output for the login on private pages. |
+| `alerts.export_path` | Health-checker JSON shown on `/alerts`. |
+| `alerts.stale_after_seconds` | Warn when the checker's last run is older than this. |
+| `ui.cache_dir` | Page-data cache for the routed pages (default `/dev/shm/signalops-status/ui`). |
 | `cache.path` | JSON snapshot path. Linux installs can use `/dev/shm/signalops-status/status-cache.json` for tmpfs-backed cache. |
 | `cache.serve_expired_seconds` | Keep serving an older snapshot while probes recover. |
 | `cache.php_cli` | PHP CLI binary used for background cache refresh workers. |
@@ -124,9 +195,10 @@ Important fields:
 | `endpoints.api.url` | Private trading API `/health.json`. |
 | `machines[].journal_units` | systemd units to summarize in the error journal. |
 | `machines[].latency_targets` | Private hostnames/IPs for point-to-point latency. |
-| `latency_map.nodes` | Display labels, cities, and fixed map coordinates. |
+| `latency_map.nodes` | Display labels, cities, optional `short` matrix labels, and fixed map coordinates. |
 | `database.summary_sql` | Optional SQL for archive summary metrics. |
 | `database.recent_sql` | Optional SQL for latest signals/events table. |
+| `database.kinds_sql` | Optional SQL for the archive breakdown by kind. |
 
 ## Cloudflare CDN
 
@@ -178,6 +250,16 @@ The timer refreshes `scripts/refresh-cache.php` every minute. This keeps most pu
 - Keep health endpoints on an encrypted private network.
 - Prefer forced-command SSH keys for probes.
 - Treat public status pages as marketing surfaces: show health, not secrets.
+- Keep `/alerts` and any other login pages out of CDN cache rules. They already send `Cache-Control: no-store, private`.
+
+## Development
+
+```bash
+php scripts/test-core.php
+php scripts/test-home.php
+```
+
+Code layout: `src/` (namespace `SignalOps\Status\`, PSR-4, no Composer), routes in `src/Routes/`, nav in `src/Nav/`, templates in `templates/`, strings in `lang/en` and `lang/zh-CN`, assets in `public/assets/site/{core,home}/`. The collectors in `app/` are shared with the classic page. See [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Requirements
 

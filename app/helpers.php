@@ -144,8 +144,57 @@ function status_tone($ok): string
     return 'warn';
 }
 
+/**
+ * A journal with warnings/errors in its 24 h window counts as a recovered incident when the probe
+ * answered, every watched service is active again and the newest entry is older than
+ * $quietSeconds (default 30 minutes).
+ */
+function journal_recovered(array $probe, ?int $now = null, int $quietSeconds = 1800): bool
+{
+    $journal = is_array($probe['journal'] ?? null) ? $probe['journal'] : [];
+    $incidents = (int)($journal['warning_count'] ?? 0) + (int)($journal['error_count'] ?? 0);
+    if (($probe['ok'] ?? null) !== true || ($journal['ok'] ?? null) !== true || $incidents === 0) {
+        return false;
+    }
+    $services = is_array($probe['services'] ?? null) ? $probe['services'] : [];
+    if ($services === []) {
+        return false;
+    }
+    foreach ($services as $state) {
+        if (strtolower(trim((string)$state)) !== 'active') {
+            return false;
+        }
+    }
+    $latest = timestamp_value($journal['latest_at'] ?? null);
+    return $latest !== false && $latest <= ($now ?? time()) - $quietSeconds;
+}
+
+/** Sets probe.journal.recovered on every machine (see journal_recovered()). */
+function annotate_journal_recovery(array $machines, ?int $now = null): array
+{
+    foreach ($machines as $index => $machine) {
+        if (is_array($machine['probe']['journal'] ?? null)) {
+            $machines[$index]['probe']['journal']['recovered'] = journal_recovered($machine['probe'], $now);
+        }
+    }
+    return $machines;
+}
+
+function normalize_machine_key(array $machine): string
+{
+    $key = (string)($machine['key'] ?? '');
+    if ($key === '') {
+        $key = (string)($machine['label'] ?? 'machine');
+    }
+    $key = strtolower(preg_replace('/[^A-Za-z0-9_.-]+/', '-', $key) ?: 'machine');
+    return trim($key, '-') ?: 'machine';
+}
+
 function journal_status_tone(array $journal): string
 {
+    if (!empty($journal['recovered'])) {
+        return 'ok';
+    }
     if ((int)($journal['error_count'] ?? 0) > 0 || ($journal['ok'] ?? null) === false) {
         return 'bad';
     }
@@ -157,6 +206,9 @@ function journal_status_tone(array $journal): string
 
 function journal_status_label(array $journal): string
 {
+    if (!empty($journal['recovered'])) {
+        return 'Recovered incident';
+    }
     if ((int)($journal['error_count'] ?? 0) > 0) {
         return 'Errors detected';
     }

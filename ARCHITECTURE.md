@@ -2,7 +2,24 @@
 
 SignalOps Status is a small PHP application that renders a public status surface from private operational signals. It favors simple deployment and careful redaction over heavy metrics storage.
 
-The frontend is rendered server-side by PHP. A small static JavaScript file handles the interactive latency map and the browser-local Light/Dark theme toggle; there is no build step or framework runtime.
+The frontend is rendered server-side by PHP. Small static ES modules (`public/assets/site/core/core.js`, `public/assets/site/home/home.js`) handle the theme switch, clock, expandable rows, live refresh, and the latency matrix/map. There is no build step or framework runtime.
+
+## Request Pipeline (v0.3)
+
+```text
+public/index.php
+  ├─ /index.php, /?classic=1 → app/views/dashboard.php (v0.2 page, unchanged caching/ETag)
+  └─ everything else         → src/front.php → Kernel
+        Preferences (?lang / ?theme → cookie + 303)
+        → Router (src/Routes/*.php)
+        → login gate for 'auth' routes (session + CSRF; demo mode without a password skips it)
+        → Controller → View (templates/layout + templates/<area>/<page>.php, lang/<locale>/*.php)
+```
+
+- Routed pages never probe. They read the snapshot written by `scripts/refresh-cache.php` (or by the classic page), via `SignalOps\Status\Home\HomeData`, and memoize the derived page model in `ui.cache_dir` (APCu when available, files otherwise).
+- `/overview/live` returns `{created_at, cache_state, values}`. The overview patches `data-live` elements in place with it.
+- `/alerts` reads the health-checker export (`alerts.export_path`). See the README for the format.
+- Assets are versioned with `?v=<filemtime>`, so `/assets/site/` can be cached for a year as immutable.
 
 ```mermaid
 flowchart TB
