@@ -128,6 +128,7 @@ function collect_status_uncached(array $config): array
     $endpoints = [];
     foreach (($config['endpoints'] ?? []) as $key => $endpoint) {
         $endpoints[$key] = fetch_json_endpoint((string)($endpoint['url'] ?? ''));
+        $endpoints[$key]['label'] = (string)($endpoint['label'] ?? $key);
     }
 
     $machines = collect_machine_probes($config['machines'] ?? [], $endpoints);
@@ -138,6 +139,7 @@ function collect_status_uncached(array $config): array
     if (!empty($config['traffic']['enabled'])) {
         $machines = apply_traffic_usage($machines, (string)($config['traffic']['path'] ?? ''));
     }
+    $machines = annotate_journal_recovery($machines);
 
     return [
         '_cache' => ['state' => 'uncached'],
@@ -155,6 +157,32 @@ function read_json_file(string $path): ?array
     }
     $data = json_decode((string)@file_get_contents($path), true);
     return is_array($data) ? $data : null;
+}
+
+/**
+ * Reads the status cache file written by refresh_status_cache() (the status array plus
+ * _meta.created_at) without probing anything. Returns ['created_at' => int, 'status' => array],
+ * or null when the file is missing, unreadable or older than $maxAgeSeconds. Also accepts the
+ * {created_at, status} envelope.
+ */
+function read_status_cache_payload(string $path, int $maxAgeSeconds): ?array
+{
+    $data = read_json_file($path);
+    if ($data === null) {
+        return null;
+    }
+    if (isset($data['status']) && is_array($data['status']) && isset($data['created_at'])) {
+        $createdAt = (int)$data['created_at'];
+        $status = $data['status'];
+    } else {
+        $createdAt = (int)($data['_meta']['created_at'] ?? 0);
+        $status = $data;
+        unset($status['_meta'], $status['_cache']);
+    }
+    if ($createdAt <= 0 || time() - $createdAt > $maxAgeSeconds) {
+        return null;
+    }
+    return ['created_at' => $createdAt, 'status' => $status];
 }
 
 function write_json_file(string $path, array $data): void
@@ -215,14 +243,19 @@ function collect_database(array $db): array
             PDO::ATTR_TIMEOUT => 4,
         ]);
         $summary = [];
+        $kinds = [];
         $recent = [];
         if (!empty($db['summary_sql'])) {
             $summary = $pdo->query((string)$db['summary_sql'])->fetch() ?: [];
         }
+        // Optional: rows of (kind, count) for the Archive Breakdown, largest first.
+        if (!empty($db['kinds_sql'])) {
+            $kinds = $pdo->query((string)$db['kinds_sql'])->fetchAll() ?: [];
+        }
         if (!empty($db['recent_sql'])) {
             $recent = $pdo->query((string)$db['recent_sql'])->fetchAll() ?: [];
         }
-        return ['ok' => true, 'summary' => $summary, 'kinds' => [], 'recent' => $recent, 'error' => null];
+        return ['ok' => true, 'summary' => $summary, 'kinds' => $kinds, 'recent' => $recent, 'error' => null];
     } catch (Throwable $e) {
         return ['ok' => false, 'summary' => [], 'kinds' => [], 'recent' => [], 'error' => redact($e->getMessage())];
     }
@@ -865,7 +898,10 @@ function apply_traffic_usage(array $machines, string $path): array
 
 function latency_tone($ok, $latencyMs): string
 {
-    if ($ok !== true || $latencyMs === null) {
+    if ($ok === false) {
+        return 'bad';
+    }
+    if ($latencyMs === null) {
         return 'warn';
     }
     $latency = (float)$latencyMs;
@@ -878,30 +914,77 @@ function latency_tone($ok, $latencyMs): string
     return 'ok';
 }
 
+/**
+ * Latency map for the dashboards. Nodes come from config (keys normalised with
+ * normalize_machine_key()); each configured link takes its value from the source machine's probe
+ * latencies, falling back to the reverse direction, then to a static latency_ms in the link config.
+ */
 function build_latency_map(array $mapConfig, array $machines): array
 {
     if (empty($mapConfig['enabled'])) {
         return ['enabled' => false, 'nodes' => [], 'links' => []];
     }
+
     $machineByKey = [];
     foreach ($machines as $machine) {
-        $machineByKey[(string)($machine['key'] ?? '')] = $machine;
+        $machineByKey[normalize_machine_key((array)$machine)] = $machine;
     }
+
+    $nodes = [];
+    foreach (($mapConfig['nodes'] ?? []) as $key => $node) {
+        if (!is_array($node)) {
+            continue;
+        }
+        $safeKey = normalize_machine_key(['key' => (string)($node['key'] ?? $key)]);
+        $nodes[$safeKey] = [
+            'key' => $safeKey,
+            'label' => (string)($node['label'] ?? ($machineByKey[$safeKey]['label'] ?? $safeKey)),
+            'location' => (string)($node['location'] ?? ($machineByKey[$safeKey]['location'] ?? '')),
+            'x' => max(0, min(100, (float)($node['x'] ?? 50))),
+            'y' => max(0, min(100, (float)($node['y'] ?? 50))),
+        ];
+        foreach (['short', 'abbr'] as $optional) {
+            if (is_string($node[$optional] ?? null) && $node[$optional] !== '') {
+                $nodes[$safeKey][$optional] = $node[$optional];
+            }
+        }
+    }
+
     $links = [];
     foreach (($mapConfig['links'] ?? []) as $link) {
-        $source = (string)($link['source'] ?? $link['from'] ?? '');
-        $target = (string)($link['target'] ?? $link['to'] ?? '');
-        $latency = $machineByKey[$source]['probe']['latencies'][$target] ?? null;
-        if (!is_array($latency)) {
-            $latency = ['ok' => null, 'latency_ms' => $link['latency_ms'] ?? null, 'error' => null];
+        if (!is_array($link)) {
+            continue;
         }
+        $from = normalize_machine_key(['key' => (string)($link['from'] ?? $link['source'] ?? '')]);
+        $to = normalize_machine_key(['key' => (string)($link['to'] ?? $link['target'] ?? '')]);
+        $source = normalize_machine_key(['key' => (string)($link['source'] ?? $from)]);
+        $target = normalize_machine_key(['key' => (string)($link['target'] ?? $to)]);
+        if (!isset($nodes[$from], $nodes[$to])) {
+            continue;
+        }
+
+        $latency = $machineByKey[$source]['probe']['latencies'][$target] ?? null;
+        if (!is_array($latency) || ($latency['latency_ms'] ?? null) === null) {
+            $reverse = $machineByKey[$target]['probe']['latencies'][$source] ?? null;
+            if (is_array($reverse) && ($reverse['latency_ms'] ?? null) !== null) {
+                $latency = $reverse;
+            }
+        }
+        if (!is_array($latency)) {
+            $latency = ['ok' => null, 'latency_ms' => is_numeric($link['latency_ms'] ?? null) ? (float)$link['latency_ms'] : null];
+        }
+        $ok = $latency['ok'] ?? null;
+        $latencyMs = is_numeric($latency['latency_ms'] ?? null) ? (float)$latency['latency_ms'] : null;
+
         $links[] = [
-            'from' => $link['from'] ?? $source,
-            'to' => $link['to'] ?? $target,
-            'label' => $link['label'] ?? ($source . ' to ' . $target),
-            'latency_ms' => $latency['latency_ms'] ?? null,
-            'tone' => $link['tone'] ?? latency_tone($latency['ok'] ?? null, $latency['latency_ms'] ?? null),
+            'from' => $from,
+            'to' => $to,
+            'label' => (string)($link['label'] ?? ($nodes[$from]['label'] . ' to ' . $nodes[$to]['label'])),
+            'ok' => $ok,
+            'latency_ms' => $latencyMs,
+            'tone' => (string)($link['tone'] ?? latency_tone($ok, $latencyMs)),
         ];
     }
-    return ['enabled' => true, 'nodes' => $mapConfig['nodes'] ?? [], 'links' => $links];
+
+    return ['enabled' => true, 'nodes' => $nodes, 'links' => $links];
 }

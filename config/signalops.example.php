@@ -12,6 +12,26 @@ return [
             'owner_url' => 'https://example.com',
         ],
     ],
+    // Password login for the pages marked with a lock (e.g. /alerts). Without a hash and with
+    // app.demo = true those pages stay open; with app.demo = false they show "not configured".
+    // Generate the hash with: php -r 'echo password_hash("your-password", PASSWORD_DEFAULT), "\n";'
+    'auth' => [
+        'enabled' => true,
+        'password_hash' => 'put-password-hash-here',
+        'session_name' => 'signalops_session',
+        'session_ttl_seconds' => 3600,
+    ],
+    // /alerts reads a JSON export written by an external health checker.
+    'alerts' => [
+        'export_path' => '/var/lib/signalops-status/alerts/page.json',
+        // Show a warning when the export is older than this many seconds.
+        'stale_after_seconds' => 300,
+    ],
+    // Routed pages (/overview, /servers, ...).
+    'ui' => [
+        // Page-data cache directory; '' = /dev/shm/signalops-status/ui or the system temp dir.
+        'cache_dir' => '/dev/shm/signalops-status/ui',
+    ],
     'cache' => [
         'enabled' => true,
         'seconds' => 90,
@@ -145,8 +165,8 @@ return [
         'nodes' => [
             'web' => ['label' => 'Web Server', 'location' => 'Los Angeles, CA', 'x' => 15, 'y' => 65],
             'db' => ['label' => 'Database Server', 'location' => 'Chicago, IL', 'x' => 58, 'y' => 45],
-            'discord' => ['label' => 'Discord Bot Server', 'location' => 'Toronto, ON', 'x' => 80, 'y' => 47],
-            'api' => ['label' => 'Trading API Server', 'location' => 'Toronto, ON', 'x' => 75, 'y' => 27],
+            'discord' => ['label' => 'Discord Bot Server', 'location' => 'Toronto, ON', 'x' => 72, 'y' => 62],
+            'api' => ['label' => 'Trading API Server', 'location' => 'Toronto, ON', 'x' => 70, 'y' => 28],
         ],
         'links' => [
             ['from' => 'web', 'to' => 'db', 'source' => 'web', 'target' => 'db', 'label' => 'Web to Database'],

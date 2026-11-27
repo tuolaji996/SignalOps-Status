@@ -1,6 +1,18 @@
 <?php
 declare(strict_types=1);
 
+// Routing: "/index.php" and "/?classic=1" serve the classic single-page dashboard below
+// (unchanged, with its snapshot ETag/Last-Modified caching). Every other path ("/", "/overview",
+// "/alerts", ...) goes to the front controller in src/front.php. The web server sends paths that
+// are not real files here (nginx: try_files $uri $uri/ /index.php?$query_string; php -S: use
+// scripts/dev-router.php), so static files under public/ are still served directly.
+$signalopsRequestPath = parse_url((string)($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH);
+$signalopsClassic = $signalopsRequestPath === '/index.php'
+    || (($signalopsRequestPath === '/' || $signalopsRequestPath === '' || $signalopsRequestPath === null) && isset($_GET['classic']) && $_GET['classic'] !== '0');
+if (!$signalopsClassic) {
+    require dirname(__DIR__) . '/src/front.php';
+}
+
 $projectRoot = dirname(__DIR__);
 
 require $projectRoot . '/app/bootstrap.php';
