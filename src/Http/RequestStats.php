@@ -5,7 +5,7 @@ namespace SignalOps\Status\Http;
 
 /**
  * Per-request numbers for the page footer, e.g. "Processed in 0.0031 s · 3 cache reads (2 hits)
- * · Gzip On · OPcache On · APCu On · PHP 8.2.25 · 2.1 MB". FPM handles one request per
+ * · Gzip On · OPcache On · APCu On · PHP 8.x · 2.1 MB". FPM handles one request per
  * worker at a time, so plain static counters are per request (reset() at the start).
  */
 final class RequestStats
